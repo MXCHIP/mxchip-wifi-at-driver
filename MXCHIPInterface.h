@@ -123,6 +123,14 @@ public:
      */
    virtual int scan(WiFiAccessPoint *ap, unsigned count);
 
+    /**
+    * Enable network automatic reconnect mode
+    *
+    *@param ENABLE network automatic reconnect mode enabled when true
+    *@param id id to reconnect the socket, valid 0-4    
+    * @return true when success
+    */
+    bool network_reconnect(bool ENABLE, uint8_t id);
 
 protected:
     /** Open a socket

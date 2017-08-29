@@ -26,106 +26,58 @@ MXCHIP::MXCHIP(PinName tx, PinName rx, bool debug)
 
 bool MXCHIP::startup(void)
 {
-    bool success=false;
-    //Query FMODE;
-    char buffer[20];
-    memset(buffer,0,sizeof(buffer));
-
-    for(int i=0;i<3;i++){
-        _parser.send("AT+REBOOT");
-        _parser.setTimeout(1000);
-        bool ok = _parser.recv("+OK",buffer);
-        _parser.setTimeout(8000);
-
-        if(ok)
-            break;
-        else {
-            if(!(i==2)) {
-            //continue to send reboot command.
-            continue;
-            } else {
-                printf("This is the first time to setup,maybe it will takes a lot of time!\r\n");
-                if(_parser.write("+++",3)&& _parser.recv("a")) {
-                    if(_parser.write("a",1)&&_parser.recv("+OK")){
-                        _parser.oob("+EVENT=SOCKET", this, &MXCHIP::_packet_handler);
-                        success= _parser.send("AT+FMODE=AT_NONE")&& \
-                        _parser.recv("+OK")&& \
-                        _parser.send("AT+FEVENT=ON")&& \
-                        _parser.recv("+OK")&& \
-                        _parser.send("AT+FACTORY")&& \ 
-                        _parser.recv("+OK");
-                        wait(3);
-                        _parser.oob("+EVENT=SOCKET", this, &MXCHIP::_packet_handler);
-                        return success;
-                    } else {
-                        printf("test error!\r\n");
-                          return false;
-                    }
-                } else {
-                    printf("send a can't get +OK\r\n");
-                    return false;
-                }
-            }
-        }
+    int i;
+    _parser.setTimeout(1000);
+    for( i=0; i<3; i++){
+        if((_parser.send("AT+FACTORY")
+            &&_parser.recv("OK")))
+        break;
     }
-
-    _parser.oob("+EVENT=SOCKET", this, &MXCHIP::_packet_handler);
-
-    //Waiting for wifi module to restart
-    if(!_parser.recv("+EVENT=READY"))
-        return false;
-
-    return true;
-}
-
-bool MXCHIP::reset(const char *reset)
-{
-    for (int i = 0; i < 2; i++) {
-        if (_parser.send("AT+%s", reset)
-            && _parser.recv("+OK")) {
-            return true;
-        }
+    while(1){
+        if((_parser.send("AT")
+            &&_parser.recv("OK")))
+        break;
+        wait_ms(100);
     }
+    _parser.setTimeout(8000);
 
+    if(!(_parser.send("AT+CIPRECVCFG=1")  //recv network data by send AT+CIPRECV=id\r
+        &&_parser.recv("OK")))
     return false;
+    _parser.oob("+CIPEVENT:SOCKET", this, &MXCHIP::_packet_handler);
+    return true;
 }
 
 bool MXCHIP::dhcp(bool enabled)
 {
-    return _parser.send("AT+DHCP=%s", enabled ? "ON":"OFF")
-        && _parser.recv("+OK");
+    return _parser.send("AT+WDHCP=%s", enabled ? "ON":"OFF")
+        && _parser.recv("OK");
 }
 
 bool MXCHIP::connect(const char *ap, const char *passPhrase)
 {
-    bool success = _parser.send("AT+WSTA=%s,%s", ap, passPhrase) && _parser.recv("+OK");
+    bool success = _parser.send("AT+WJAP=%s,%s", ap, passPhrase)
+                    && _parser.recv("OK");
+                  //  && _parser.recv("+WEVENT:STATION_UP");
+   // _parser.setTimeout(8000);
     if(!success)
     	return false;
-    if(!_parser.send("AT+WLANF=STA,ON")&&_parser.recv("+OK")){
-        return false;
-    }
-    if (_parser.recv("+EVENT=WIFI_LINK,STATION_UP")) {
+    if(_parser.recv("+WEVENT:STATION_UP"))
         return true;
-    }
-    return false;
-}
-
-bool MXCHIP::setChannel(uint8_t channel)
-{
-    return _parser.send("AT+WAPCH=%d",channel) && _parser.recv("+OK");
+    else
+        return false;
 }
 
 bool MXCHIP::disconnect(void)
 {
-    return _parser.send("AT+WLANF=STA,OFF")
-        && _parser.recv("+EVENT=WIFI_LINK,STATION_DOWN")
-        && _parser.recv("+OK");
+    return _parser.send("AT+WJAPQ")
+        && _parser.recv("OK");
 }
 
 const char *MXCHIP::getIPAddress(void)
 {
-    if (!(_parser.send("AT+IPCONFIG")
-        && _parser.recv("+OK=%*[^,],%*[^,],%*[^,],%[^,],%*[^\r]%*[\r]%*[\n]", _ip_buffer))) {
+    if (!(_parser.send("AT+WJAPIP?")
+        && _parser.recv("+WJAPIP:%[^,],%*[^,],%*[^,],%*[^\r]%*[\r]%*[\n]", _ip_buffer))) {
         return NULL;
     }
     return _ip_buffer;
@@ -134,68 +86,70 @@ const char *MXCHIP::getIPAddress(void)
 const char *MXCHIP::getMACAddress(void)
 {
     if (!(_parser.send("AT+WMAC")
-        && _parser.recv("+OK=%[^\r]%*[\r]%*[\n]", _mac_buffer))) {
+        && _parser.recv("+WMAC:%[^\r]%*[\r]%*[\n]", _mac_buffer))) {
         return 0;
     }
     return _mac_buffer;
 }
 
-
 //get current signal strength
-int8_t MXCHIP::getRSSI(){
+int8_t MXCHIP::getRSSI()
+{
     int8_t rssi = 0;
-    if (!(_parser.send("AT+WLINK") && _parser.recv("+OK=%*d,%d,%*d",&rssi)))
+    if (!(_parser.send("AT+WJAP?")
+        && _parser.recv("+WJAP:%*[^,],%*[^,],%*[^,],%[^\r]%*[\r]%*[\n]", &rssi))) {
         return false;
+    }
     return rssi;
 }
-
 
 bool MXCHIP::isConnected(void)
 {
     return getIPAddress() != 0;
 }
 
+bool MXCHIP::NetworkReconnect(bool ENABLE, uint8_t id)
+{
+    if(ENABLE == 0){
+        if(!(_parser.send("AT+CIPAUTOCONN=%d,0", id)
+            &&_parser.recv("OK")))
+        return false;
+    }else{
+        if(!(_parser.send("AT+CIPAUTOCONN=%d,1", id)
+            &&_parser.recv("OK")))
+        return false;
+    }
+    return true;
+}
+
 int MXCHIP::open(const char *type, int id, const char* addr, int port)
 {
-    _parser.send("AT+CON1=%s,%d,%d,%s", type, 20001, port, addr);
-    _parser.recv("+OK");
+    if(id>4)
+        return false;
 
-    char state[5];
-    _parser.send("AT+CONF=1");
-    _parser.recv("+OK=%*d,%[^\r]%*[\r]%*[\n]",&state);
-
-    if(strstr(state,"ON")){
-    	if(!(_parser.send("AT+CONF=1,OFF")&&_parser.recv("+OK")))
-    		return 0;
+    int socketId = -1;
+    /*There are some problem. when start CIPSTART.*/
+    if (!(_parser.send("AT+CIPSTART=%d,%s,%s,%d,%d", id, type, addr, port,id+20001)
+            && _parser.recv("OK")))
+        return false;
+    wait(1);
+    if(!_parser.recv("+CIPEVENT:%d,%*[^,],CONNECTED",&socketId)) {
+        return false;
     }
-
-    if(!(_parser.send("AT+CONF=1,ON")&&_parser.recv("+OK")))
-        return 0;
-
-    _parser.setTimeout(40000);
-    int socketId;
-    bool connect = _parser.recv("+EVENT=%*[^,],CONNECT,%d",&socketId);
-    _parser.setTimeout(8000);
-
-    if(connect)
-        return socketId;
-    else
-        return 0;
+    return true;
 }
 
 bool MXCHIP::send(int id, const void *data, uint32_t amount)
 {
     //May take a second try if device is busy
     for (unsigned i = 0; i < 2; i++) {
-        if (_parser.send("AT+SSEND=%d,%d", id, amount)
-            && _parser.recv(">")
+        if (_parser.send("AT+CIPSEND=%d,%d", id, amount)
             && _parser.write((char*)data, (int)amount) >= 0
-            && _parser.recv("+OK")) {
+            && _parser.recv("OK")) {
             //wait(3);
             return true;
         }
     }
-
     return false;
 }
 
@@ -203,7 +157,6 @@ void MXCHIP::_packet_handler()
 {
     int id;
     uint32_t amount;
-
     // parse out the packet
     if (!_parser.recv(",%d,%d,", &id, &amount)) {
         return;
@@ -239,7 +192,6 @@ int32_t MXCHIP::recv(int id, void *data, uint32_t amount)
 
                 if (q->len <= amount) { // Return and remove full packet
                     memcpy(data, q+1, q->len);
-
                     if (_packets_end == &(*p)->next) {
                         _packets_end = p;
                     }
@@ -273,13 +225,12 @@ bool MXCHIP::close(int id)
 {
     //May take a second try if device is busy
     for (unsigned i = 0; i < 2; i++) {
-        if (_parser.send("AT+CONF=1,OFF")
-            && _parser.recv("+OK")) {
-            if (_parser.recv("+EVENT=%*[^,],DISCONNECT,%*d"))
+        if (_parser.send("AT+CIPSTOP=%d",id)
+            && _parser.recv("OK")) {
+            if (_parser.recv("+CIPEVENT:%*[^,],%*[^,],CLOSED"))
                 return true;
         }
     }
-
     return false;
 }
 

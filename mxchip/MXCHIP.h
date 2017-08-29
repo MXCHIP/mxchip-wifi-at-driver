@@ -36,13 +36,6 @@ public:
     bool startup();
 
     /**
-    * Reset MXCHIP
-    *
-    * @return true only if MXCHIP resets successfully
-    */
-    bool reset(const char *reset);
-
-    /**
     * Enable/Disable DHCP
     *
     * @param enabled DHCP enabled when true
@@ -50,16 +43,6 @@ public:
     * @return true only if MXCHIP enables/disables DHCP successfully
     */
     bool dhcp(bool enabled);
-
-    /*Handle  event message.
-     *
-     * @param type:
-     *               0:handle station up event or connect event.
-     *               1:handle reboot event.
-     *@param buffer: Buffer to receive event data.
-     *@param time:   time-out period.
-     */
-    bool handleEvent(int type,char *buffer,int time);
 
     /**
     * Connect MXCHIP to AP
@@ -70,10 +53,6 @@ public:
     */
     bool connect(const char *ap, const char *passPhrase);
 
-    /*Set channel for MXCHIP soft AP mode.
-     *
-     */
-    bool setChannel(uint8_t channel);
     /**
     * Disconnect MXCHIP from AP
     *
@@ -107,6 +86,15 @@ public:
     * @return true only if the chip has an IP address
     */
     bool isConnected(void);
+    
+    /**
+    * Enable network automatic reconnect mode
+    *
+    *@param ENABLE network automatic reconnect mode enabled when true
+    *@param id id to reconnect the socket, valid 0-4    
+    * @return true when success
+    */
+    bool NetworkReconnect(bool ENABLE, uint8_t id);
 
     /**
     * Open a socketed connection

@@ -39,14 +39,18 @@ int MXCHIPInterface::connect(const char *ssid, const char *pass, nsapi_security_
     return connect();
 }
 
-int MXCHIPInterface::connect(){
+int MXCHIPInterface::connect()
+{
     _mxchip.setTimeout(MXCHIP_CONNECT_TIMEOUT);
-
     if (!_mxchip.startup()) {
         return NSAPI_ERROR_DEVICE_ERROR;
     }
     if (!_mxchip.connect(ap_ssid, ap_pass)) {
         return NSAPI_ERROR_NO_CONNECTION;
+    }
+    for(int id=0; id<MXCHIP_SOCKET_COUNT; id++){
+        if(!network_reconnect(false, id))
+            return false;
     }
     if (!_mxchip.getIPAddress()) {
         return NSAPI_ERROR_DHCP_FAILURE;
@@ -70,7 +74,7 @@ int MXCHIPInterface::set_credentials(const char *ssid, const char *pass, nsapi_s
 
 int MXCHIPInterface::set_channel(uint8_t channel)
 {
-    return _mxchip.setChannel(channel);
+    return NSAPI_ERROR_UNSUPPORTED;
 }
 
 int MXCHIPInterface::disconnect()
@@ -105,7 +109,8 @@ const char* MXCHIPInterface::get_netmask()
 }
 
 
-int8_t MXCHIPInterface::get_rssi(){
+int8_t MXCHIPInterface::get_rssi()
+{
     return _mxchip.getRSSI();
 }
 
@@ -115,10 +120,13 @@ int MXCHIPInterface::scan(WiFiAccessPoint *ap, unsigned count)
     return NSAPI_ERROR_UNSUPPORTED;
 }
 
+bool MXCHIPInterface::network_reconnect(bool ENABLE, uint8_t id)
+{
+    return _mxchip.NetworkReconnect(ENABLE, id);
+}
 
 struct MXCHIP_socket {
     int id;
-    int socketId;
     nsapi_protocol_t proto;
     bool connected;
     SocketAddress addr;
@@ -129,7 +137,7 @@ int MXCHIPInterface::socket_open(void **handle, nsapi_protocol_t proto)
     // Look for an unused socket
     int id = -1;
 
-    for (int i = 1; i < MXCHIP_SOCKET_COUNT; i++) {
+    for (int i = 0; i < MXCHIP_SOCKET_COUNT; i++) {
         if (!_ids[i]) {
             id = i;
             _ids[i] = true;
@@ -145,9 +153,7 @@ int MXCHIPInterface::socket_open(void **handle, nsapi_protocol_t proto)
     if (!socket) {
         return NSAPI_ERROR_NO_SOCKET;
     }
-
     socket->id = id;
-    socket->socketId = 0;
     socket->proto = proto;
     socket->connected = false;
     *handle = socket;
@@ -160,7 +166,7 @@ int MXCHIPInterface::socket_close(void *handle)
     int err = 0;
     _mxchip.setTimeout(MXCHIP_MISC_TIMEOUT);
 
-    if (socket->connected && !_mxchip.close(socket->socketId)) {
+    if (socket->connected && !_mxchip.close(socket->id)) {
         err = NSAPI_ERROR_DEVICE_ERROR;
     }
 
@@ -184,13 +190,10 @@ int MXCHIPInterface::socket_connect(void *handle, const SocketAddress &addr)
 {
     struct MXCHIP_socket *socket = (struct MXCHIP_socket *)handle;
     _mxchip.setTimeout(MXCHIP_MISC_TIMEOUT);
-    const char *proto = (socket->proto == NSAPI_TCP) ?  "CLIENT":"UNICAST";
-    socket -> socketId = _mxchip.open(proto, socket->id, addr.get_ip_address(), addr.get_port());
-    if (!(socket -> socketId)) {
+    const char *proto = ((socket->proto == NSAPI_TCP) ?  "tcp_client":"udp_unicast");
+    if(!_mxchip.open(proto, socket->id, addr.get_ip_address(), addr.get_port()))
         return NSAPI_ERROR_DEVICE_ERROR;
-    }
     socket->connected = true;
-
     return 0;
 }
 
@@ -203,11 +206,9 @@ int MXCHIPInterface::socket_send(void *handle, const void *data, unsigned size)
 {
     struct MXCHIP_socket *socket = (struct MXCHIP_socket *)handle;
     _mxchip.setTimeout(MXCHIP_SEND_TIMEOUT);
-
-    if (!_mxchip.send(socket->socketId, data, size)) {
+    if (!_mxchip.send(socket->id, data, size)) {
         return NSAPI_ERROR_DEVICE_ERROR;
     }
-
     return size;
 }
 
@@ -215,44 +216,28 @@ int MXCHIPInterface::socket_recv(void *handle, void *data, unsigned size)
 {
     struct MXCHIP_socket *socket = (struct MXCHIP_socket *)handle;
     _mxchip.setTimeout(MXCHIP_RECV_TIMEOUT);
-
-    int32_t recv = _mxchip.recv(socket->socketId, data, size);
+    int32_t recv = _mxchip.recv(socket->id, data, size);
     if (recv < 0) {
         return NSAPI_ERROR_WOULD_BLOCK;
     }
-
     return recv;
 }
 
 int MXCHIPInterface::socket_sendto(void *handle, const SocketAddress &addr, const void *data, unsigned size)
 {
     struct MXCHIP_socket *socket = (struct MXCHIP_socket *)handle;
-    if (socket->connected && socket->addr != addr) {
-        if (!_mxchip.close(socket->socketId)) {
-            return NSAPI_ERROR_DEVICE_ERROR;
-        }
-        socket->connected = false;
-    }
-
-    if (!socket->connected) {
-        int err = socket_connect(socket, addr);
-        if (err < 0) {
+    if (!socket->connected ) {
+        int err = socket_connect( socket, addr );
+        if(err < 0)
             return err;
-        }
-        socket->addr = addr;
     }
-
     return socket_send(socket, data, size);
 }
 
 int MXCHIPInterface::socket_recvfrom(void *handle, SocketAddress *addr, void *data, unsigned size)
 {
     struct MXCHIP_socket *socket = (struct MXCHIP_socket *)handle;
-    int ret = socket_recv(socket, data, size);
-    if (ret >= 0 && addr) {
-       *addr = socket->addr;
-    }
-    return ret;
+    return socket_recv(socket, data, size);
 }
 
 void MXCHIPInterface::socket_attach(void *handle, void (*callback)(void *), void *data)
@@ -262,7 +247,8 @@ void MXCHIPInterface::socket_attach(void *handle, void (*callback)(void *), void
     _cbs[socket->id].data = data;
 }
 
-void MXCHIPInterface::event() {
+void MXCHIPInterface::event() 
+{
     for (int i = 0; i < MXCHIP_SOCKET_COUNT; i++) {
         if (_cbs[i].callback) {
             _cbs[i].callback(_cbs[i].data);
