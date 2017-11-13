@@ -85,7 +85,7 @@ const char *MXCHIP::getIPAddress(void)
 
 const char *MXCHIP::getMACAddress(void)
 {
-    if (!(_parser.send("AT+WMAC")
+    if (!(_parser.send("AT+WMAC?")
         && _parser.recv("+WMAC:%[^\r]%*[\r]%*[\n]", _mac_buffer))) {
         return 0;
     }
